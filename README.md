@@ -2,6 +2,10 @@
 
 SignalScout monitors **Reddit, X, LinkedIn, and Hacker News** for high-intent customer conversations (product recommendation requests, competitor complaints, explicit purchasing intent), filters out noisy keyword spam with a two-stage LLM intent pipeline, and delivers actionable Slack & Discord alerts containing an authentic **Contextual Reply Outline**.
 
+> [!WARNING]
+> **Project Status — Work in Progress (Not Fully Ready)**
+> This project is currently under active development and is **not fully ready for production**. Some parts, features, or workflow steps will fail or behave unexpectedly. We are actively working on fixing all remaining issues.
+
 ## Why Teams Switch from Syften & Octolens
 - **All-Channel Flat Pricing ($25/mo):** Reddit, X, LinkedIn, and Hacker News included with zero channel add-ons.
 - **Two-Stage LLM Intent Filtering:** Drops job posts, promo spam, and irrelevant keyword hits before they ever hit Slack (while logging blocked noise in an audit tab).
