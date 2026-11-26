@@ -27,8 +27,9 @@ describe("SignalScout API Router", () => {
     const db = new MemoryDb();
     const healthRes = await handleApiRequest(await jsonReq("/api/health"), db);
     expect(healthRes.status).toBe(200);
-    const health = (await healthRes.json()) as { ok: boolean };
+    const health = (await healthRes.json()) as { ok: boolean; free: boolean };
     expect(health.ok).toBe(true);
+    expect(health.free).toBe(true);
 
     const evalRes = await handleApiRequest(
       await jsonReq("/api/demo/evaluate", {
@@ -56,7 +57,7 @@ describe("SignalScout API Router", () => {
     expect(evaluated.slackPayload.blocks.length).toBeGreaterThan(3);
   });
 
-  it("registers user, sets signed session cookie, manages monitors, ingests webhooks, and upgrades billing", async () => {
+  it("registers a 100% free user workspace, manages topics, ingests webhooks, and returns free billing status", async () => {
     const db = new MemoryDb();
 
     const regRes = await handleApiRequest(
@@ -80,9 +81,9 @@ describe("SignalScout API Router", () => {
     expect(meRes.status).toBe(200);
     const me = (await meRes.json()) as { user: { email: string }; workspace: { ingestSecret: string; plan: string } };
     expect(me.user.email).toBe("founder@acme.co");
-    expect(me.workspace.plan).toBe("trial");
+    expect(me.workspace.plan).toBe("free");
 
-    // Create monitor
+    // Create monitor with non-numeric minConfidence (should safely default instead of NaN)
     const monRes = await handleApiRequest(
       await jsonReq("/api/monitors", {
         method: "POST",
@@ -93,13 +94,14 @@ describe("SignalScout API Router", () => {
           competitors: ["sentry"],
           negativeKeywords: ["hiring"],
           channels: ["reddit", "x", "linkedin", "hackernews"],
-          minConfidence: 70,
+          minConfidence: "not-a-number",
         },
       }),
       db,
     );
     expect(monRes.status).toBe(201);
-    const createdMon = (await monRes.json()) as { monitor: { id: string } };
+    const createdMon = (await monRes.json()) as { monitor: { id: string; minConfidence: number } };
+    expect(createdMon.monitor.minConfidence).toBe(70);
 
     // Push a live X post via Webhook Bridge
     const ingestRes = await handleApiRequest(
@@ -142,15 +144,54 @@ describe("SignalScout API Router", () => {
     const regenBody = (await regenRes.json()) as { lead: { replyTone: string } };
     expect(regenBody.lead.replyTone).toBe("technical");
 
-    // Subscribe to $25/mo flat plan (sandbox mode when STRIPE_SECRET_KEY is unset)
-    const billRes = await handleApiRequest(
-      await jsonReq("/api/billing/subscribe", { method: "POST", cookie, body: {} }),
+    // Billing route confirms 100% free status
+    const billRes = await handleApiRequest(await jsonReq("/api/billing", { cookie }), db);
+    expect(billRes.status).toBe(200);
+    const billData = (await billRes.json()) as {
+      plan: string;
+      priceMonthlyCents: number;
+      allFeaturesUnlocked: boolean;
+    };
+    expect(billData.plan).toBe("free");
+    expect(billData.priceMonthlyCents).toBe(0);
+    expect(billData.allFeaturesUnlocked).toBe(true);
+  });
+
+  it("validates malformed input cleanly with 400s instead of 500s", async () => {
+    const db = new MemoryDb();
+    const badReg = await handleApiRequest(
+      await jsonReq("/api/auth/register", {
+        method: "POST",
+        body: { email: ["@"], name: 123, password: "password123" },
+      }),
       db,
     );
-    expect(billRes.status).toBe(200);
-    const billData = (await billRes.json()) as { plan: string; mode: string };
-    expect(billData.plan).toBe("pro_flat_25");
-    expect(billData.mode).toBe("sandbox");
+    expect(badReg.status).toBe(400);
+
+    const demoRes = await handleApiRequest(await jsonReq("/api/auth/demo", { method: "POST" }), db);
+    const cookie = extractSessionCookie(demoRes);
+    const demoBody = (await demoRes.json()) as { workspace: { ingestSecret: string } };
+
+    // Non-array posts to webhook bridge should return 400, not 500
+    const badWebhook = await handleApiRequest(
+      await jsonReq(`/api/ingest/webhook?secret=${encodeURIComponent(demoBody.workspace.ingestSecret)}`, {
+        method: "POST",
+        body: { posts: "not-an-array" },
+      }),
+      db,
+    );
+    expect(badWebhook.status).toBe(400);
+
+    // Localhost webhook URL rejected immediately on settings save
+    const ssrfRes = await handleApiRequest(
+      await jsonReq("/api/settings", {
+        method: "PATCH",
+        cookie,
+        body: { slackWebhookUrl: "https://localhost/internal" },
+      }),
+      db,
+    );
+    expect(ssrfRes.status).toBe(400);
   });
 
   it("logs into 1-click demo workspace with seeded leads and noise audit", async () => {
@@ -168,9 +209,10 @@ describe("SignalScout API Router", () => {
   it("dispatches rewritten requests through the Vercel Web API handler (api/index.ts)", async () => {
     const healthRes = await vercelGet(new Request("https://signalscout.vercel.app/api/index?__route=health"));
     expect(healthRes.status).toBe(200);
-    const health = (await healthRes.json()) as { ok: boolean; service: string };
+    const health = (await healthRes.json()) as { ok: boolean; service: string; free: boolean };
     expect(health.ok).toBe(true);
     expect(health.service).toBe("SignalScout");
+    expect(health.free).toBe(true);
 
     const demoRes = await vercelPost(
       new Request("https://signalscout.vercel.app/api/index?__route=auth/demo", { method: "POST" }),

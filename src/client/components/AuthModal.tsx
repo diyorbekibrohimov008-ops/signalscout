@@ -1,5 +1,5 @@
-import React, { useState } from "react";
-import { Loader2, Radio, X } from "lucide-react";
+import React, { useEffect, useState } from "react";
+import { Loader2, X } from "lucide-react";
 import { api } from "../api";
 
 interface AuthModalProps {
@@ -13,11 +13,18 @@ export function AuthModal({ initialMode, onClose, onAuthenticated }: AuthModalPr
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [companyName, setCompanyName] = useState("");
   const [productName, setProductName] = useState("");
   const [productDescription, setProductDescription] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -31,7 +38,6 @@ export function AuthModal({ initialMode, onClose, onAuthenticated }: AuthModalPr
           name,
           email,
           password,
-          companyName: companyName || undefined,
           productName: productName || undefined,
           productDescription: productDescription || undefined,
         });
@@ -39,64 +45,53 @@ export function AuthModal({ initialMode, onClose, onAuthenticated }: AuthModalPr
       await onAuthenticated();
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Authentication failed");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleDemo = async () => {
-    setError(null);
-    setLoading(true);
-    try {
-      await api.launchDemo();
-      await onAuthenticated();
-      onClose();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to launch demo");
+      setError(err instanceof Error ? err.message : "Could not sign in.");
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4 overscroll-contain">
-      <div className="relative w-full max-w-md rounded-2xl border border-slate-800 bg-slate-900 p-6 shadow-2xl overscroll-contain">
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="auth-modal-title"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-[#161B26]/35 backdrop-blur-[2px] p-4 overscroll-contain"
+    >
+      <div className="relative w-full max-w-md rounded-lg border border-[#DDE2EB] bg-white p-6 shadow-xl overscroll-contain">
         <button
           type="button"
           onClick={onClose}
           aria-label="Close dialog"
-          className="absolute right-4 top-4 rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-slate-200 cursor-pointer"
+          className="absolute right-4 top-4 rounded-md p-1.5 text-[#525D70] hover:bg-[#F8F9FB] hover:text-[#161B26] cursor-pointer"
         >
           <X className="h-4 w-4" />
         </button>
 
-        <div className="mb-5 flex items-center gap-2.5">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-400">
-            <Radio className="h-4 w-4" />
-          </div>
-          <div>
-            <h2 className="text-lg font-bold text-white">
-              {mode === "login" ? "Sign in to SignalScout" : "Create your $25/mo flat workspace"}
-            </h2>
-            <p className="text-xs text-slate-400">
-              Reddit, X, LinkedIn &amp; HN included &bull; 14-day free trial
-            </p>
-          </div>
+        <div className="mb-5 space-y-1">
+          <h2 id="auth-modal-title" className="font-serif text-xl font-semibold text-[#161B26]">
+            {mode === "login" ? "Sign in to SignalScout" : "Create your free workspace"}
+          </h2>
+          <p className="text-xs text-[#525D70]">
+            Keep your topics, reply drafts, and Slack notifications private — free forever.
+          </p>
         </div>
 
-        <div className="mb-4 grid grid-cols-2 rounded-lg bg-slate-950 p-1 border border-slate-800 text-xs font-medium">
+        <div className="mb-4 grid grid-cols-2 rounded-md border border-[#DDE2EB] bg-[#F8F9FB] p-0.5 text-xs font-medium">
           <button
             type="button"
             onClick={() => {
               setMode("register");
               setError(null);
             }}
-            className={`rounded-md py-1.5 transition cursor-pointer ${
-              mode === "register" ? "bg-slate-800 text-white" : "text-slate-400 hover:text-slate-200"
+            className={`rounded py-1.5 transition-colors cursor-pointer ${
+              mode === "register" ? "bg-white text-[#161B26] shadow-2xs" : "text-[#525D70] hover:text-[#161B26]"
             }`}
           >
-            Create Workspace
+            Create account
           </button>
           <button
             type="button"
@@ -104,95 +99,96 @@ export function AuthModal({ initialMode, onClose, onAuthenticated }: AuthModalPr
               setMode("login");
               setError(null);
             }}
-            className={`rounded-md py-1.5 transition cursor-pointer ${
-              mode === "login" ? "bg-slate-800 text-white" : "text-slate-400 hover:text-slate-200"
+            className={`rounded py-1.5 transition-colors cursor-pointer ${
+              mode === "login" ? "bg-white text-[#161B26] shadow-2xs" : "text-[#525D70] hover:text-[#161B26]"
             }`}
           >
-            Sign In
+            Sign in
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-3">
-          {mode === "register" && (
-            <>
+        <form onSubmit={handleSubmit} className="space-y-3.5">
+          {mode === "register" ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label className="mb-1 block text-xs font-medium text-slate-300">Your Name</label>
+                <label htmlFor="auth-name" className="block text-xs font-medium text-[#3B4557] mb-1">
+                  Your name
+                </label>
                 <input
+                  id="auth-name"
                   type="text"
                   required
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   placeholder="Alex Rivera"
-                  className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-emerald-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+                  className="w-full rounded-md border border-[#CFD7E3] bg-white px-3 py-2 text-sm text-[#161B26]"
                 />
               </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="mb-1 block text-xs font-medium text-slate-300">Product Name</label>
-                  <input
-                    type="text"
-                    value={productName}
-                    onChange={(e) => setProductName(e.target.value)}
-                    placeholder="AcmeAnalytics"
-                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-emerald-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
-                  />
-                </div>
-                <div>
-                  <label className="mb-1 block text-xs font-medium text-slate-300">Company</label>
-                  <input
-                    type="text"
-                    value={companyName}
-                    onChange={(e) => setCompanyName(e.target.value)}
-                    placeholder="Acme Inc."
-                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-emerald-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
-                  />
-                </div>
+              <div>
+                <label htmlFor="auth-product" className="block text-xs font-medium text-[#3B4557] mb-1">
+                  Product name
+                </label>
+                <input
+                  id="auth-product"
+                  type="text"
+                  value={productName}
+                  onChange={(e) => setProductName(e.target.value)}
+                  placeholder="AcmeNotes"
+                  className="w-full rounded-md border border-[#CFD7E3] bg-white px-3 py-2 text-sm text-[#161B26]"
+                />
               </div>
-            </>
-          )}
+            </div>
+          ) : null}
 
           <div>
-            <label className="mb-1 block text-xs font-medium text-slate-300">Work Email</label>
+            <label htmlFor="auth-email" className="block text-xs font-medium text-[#3B4557] mb-1">
+              Email
+            </label>
             <input
+              id="auth-email"
               type="email"
               required
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="founder@company.com"
-              className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-emerald-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+              placeholder="you@company.com"
+              className="w-full rounded-md border border-[#CFD7E3] bg-white px-3 py-2 text-sm text-[#161B26]"
             />
           </div>
 
           <div>
-            <label className="mb-1 block text-xs font-medium text-slate-300">Password (6+ characters)</label>
+            <label htmlFor="auth-password" className="block text-xs font-medium text-[#3B4557] mb-1">
+              Password (at least 6 characters)
+            </label>
             <input
+              id="auth-password"
               type="password"
               required
               minLength={6}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="••••••••"
-              className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-emerald-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+              className="w-full rounded-md border border-[#CFD7E3] bg-white px-3 py-2 text-sm text-[#161B26]"
             />
           </div>
 
-          {mode === "register" && (
+          {mode === "register" ? (
             <div>
-              <label className="mb-1 block text-xs font-medium text-slate-300">
-                What does your product do? (powers Reply Assistant)
+              <label htmlFor="auth-desc" className="block text-xs font-medium text-[#3B4557] mb-1">
+                What does your product do? (optional)
               </label>
               <textarea
+                id="auth-desc"
                 rows={2}
                 value={productDescription}
                 onChange={(e) => setProductDescription(e.target.value)}
-                placeholder="One sentence describing who you help and what makes you better..."
-                className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-emerald-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+                placeholder="One sentence used to personalize your reply drafts"
+                className="w-full rounded-md border border-[#CFD7E3] bg-white px-3 py-2 text-sm text-[#161B26]"
               />
             </div>
-          )}
+          ) : null}
 
           {error ? (
-            <div className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+            <div className="rounded-md border border-[#F2C6C6] bg-[#FDF2F2] px-3 py-2 text-xs text-[#9B1C1C]">
               {error}
             </div>
           ) : null}
@@ -200,27 +196,12 @@ export function AuthModal({ initialMode, onClose, onAuthenticated }: AuthModalPr
           <button
             type="submit"
             disabled={loading}
-            className="flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 disabled:opacity-60 px-4 py-2.5 text-sm font-semibold text-slate-950 transition cursor-pointer"
+            className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-[#2553B8] hover:bg-[#1D4499] disabled:opacity-60 px-4 py-2.5 text-sm font-medium text-white cursor-pointer"
           >
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-            {mode === "login" ? "Sign In" : "Create Free Trial Workspace"}
+            {mode === "login" ? "Sign in" : "Create free workspace"}
           </button>
         </form>
-
-        <div className="my-4 flex items-center gap-3 text-[11px] uppercase tracking-wider text-slate-500">
-          <div className="h-px flex-1 bg-slate-800" />
-          <span>or explore instantly</span>
-          <div className="h-px flex-1 bg-slate-800" />
-        </div>
-
-        <button
-          type="button"
-          disabled={loading}
-          onClick={handleDemo}
-          className="w-full rounded-lg border border-slate-700 bg-slate-800/80 hover:bg-slate-800 px-4 py-2 text-xs font-semibold text-slate-200 transition cursor-pointer"
-        >
-          Launch Instant Demo Workspace (pre-loaded leads &amp; noise log)
-        </button>
       </div>
     </div>
   );

@@ -12,7 +12,7 @@ export type ReplyTone = "founder" | "peer" | "technical";
 
 export type LeadStatus = "new" | "replied" | "dismissed";
 
-export type PlanTier = "trial" | "pro_flat_25" | "canceled";
+export type PlanTier = "free";
 
 export type SourceMode = "live" | "webhook" | "simulation";
 
@@ -32,7 +32,6 @@ export interface SanitizedWorkspace {
   idealCustomer: string;
   defaultTone: ReplyTone;
   plan: PlanTier;
-  trialEndsAt: string;
   slackWebhookUrl: string;
   discordWebhookUrl: string;
   ingestSecret: string;
@@ -118,15 +117,6 @@ export interface WorkspaceStats {
   avgConfidence: number;
 }
 
-export interface BillingEventRecord {
-  id: string;
-  workspaceId: string;
-  eventType: string;
-  amountCents: number;
-  description: string;
-  createdAt: string;
-}
-
 export interface Stage1Result {
   passed: boolean;
   reason: string;
@@ -166,9 +156,9 @@ export interface DemoEvaluateResponse {
 export interface HealthResponse {
   ok: boolean;
   service: string;
+  free: boolean;
   database: "postgres" | "memory";
   aiGatewayActive: boolean;
-  stripeConfigured: boolean;
   timestamp: string;
 }
 
@@ -184,13 +174,4 @@ export interface DispatchResult {
   slackSent: boolean;
   discordSent: boolean;
   errors: string[];
-}
-
-export interface BillingResponse {
-  plan: PlanTier;
-  priceMonthlyCents: number;
-  trialEndsAt: string;
-  stripeConfigured: boolean;
-  events: BillingEventRecord[];
-  stats: WorkspaceStats;
 }

@@ -8,11 +8,11 @@ const workspace: WorkspaceRecord = {
   name: "SignalScout",
   productName: "SignalScout",
   productDescription:
-    "Flat $25/mo buying-intent listener across Reddit, X, LinkedIn, and HN with LLM noise filtering and Slack reply outlines.",
+    "Free buying-intent listener across Reddit, X, LinkedIn, and HN with LLM noise filtering and Slack reply outlines.",
   productUrl: "https://signalscout.app",
   idealCustomer: "SaaS founders",
   defaultTone: "founder",
-  plan: "pro_flat_25",
+  plan: "free",
   trialEndsAt: new Date(Date.now() + 86400_000 * 14).toISOString(),
   stripeCustomerId: null,
   stripeSubscriptionId: null,

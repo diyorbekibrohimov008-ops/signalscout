@@ -1,70 +1,79 @@
 import React from "react";
 import type { BuyingUrgency, Channel, IntentType } from "../types";
 
-export const CHANNEL_META: Record<Channel, { label: string; badgeClass: string; short: string }> = {
+export const CHANNEL_META: Record<Channel, { label: string; short: string; textClass: string; dotClass: string }> = {
   reddit: {
     label: "Reddit",
     short: "Reddit",
-    badgeClass: "bg-orange-500/15 text-orange-300 border-orange-500/30",
+    textClass: "text-[#9A3412]",
+    dotClass: "bg-[#C2410C]",
   },
   x: {
-    label: "X (Twitter)",
+    label: "X",
     short: "X",
-    badgeClass: "bg-sky-500/15 text-sky-300 border-sky-500/30",
+    textClass: "text-[#1E3A5F]",
+    dotClass: "bg-[#1E3A5F]",
   },
   linkedin: {
     label: "LinkedIn",
     short: "LinkedIn",
-    badgeClass: "bg-blue-500/15 text-blue-300 border-blue-500/30",
+    textClass: "text-[#1D4ED8]",
+    dotClass: "bg-[#1D4ED8]",
   },
   hackernews: {
     label: "Hacker News",
     short: "HN",
-    badgeClass: "bg-amber-500/15 text-amber-300 border-amber-500/30",
+    textClass: "text-[#92400E]",
+    dotClass: "bg-[#B45309]",
   },
 };
 
-export const INTENT_META: Record<IntentType, { label: string; badgeClass: string }> = {
+export const INTENT_META: Record<IntentType, { label: string; toneClass: string }> = {
   recommendation_request: {
-    label: "Recommendation Request",
-    badgeClass: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
+    label: "Asking for recommendations",
+    toneClass: "text-[#1B6E4F]",
   },
   competitor_complaint: {
-    label: "Competitor Complaint",
-    badgeClass: "bg-rose-500/15 text-rose-300 border-rose-500/30",
+    label: "Unhappy with a competitor",
+    toneClass: "text-[#9A4B16]",
   },
   explicit_buying_intent: {
-    label: "Explicit Buying Intent",
-    badgeClass: "bg-amber-500/15 text-amber-300 border-amber-500/30",
+    label: "Ready to buy or switch",
+    toneClass: "text-[#2553B8]",
   },
   noise_or_irrelevant: {
-    label: "Filtered Noise",
-    badgeClass: "bg-slate-800 text-slate-400 border-slate-700",
+    label: "Filtered out",
+    toneClass: "text-[#525D70]",
   },
 };
 
-export const URGENCY_META: Record<BuyingUrgency, { label: string; className: string }> = {
-  high: { label: "High urgency", className: "text-emerald-300 bg-emerald-500/10 border-emerald-500/30" },
-  medium: { label: "Medium urgency", className: "text-amber-300 bg-amber-500/10 border-amber-500/30" },
-  low: { label: "Low urgency", className: "text-slate-400 bg-slate-800/70 border-slate-700" },
+export const URGENCY_META: Record<BuyingUrgency, { label: string; textClass: string }> = {
+  high: { label: "High urgency", textClass: "text-[#9A4B16]" },
+  medium: { label: "Medium urgency", textClass: "text-[#161B26]" },
+  low: { label: "Low urgency", textClass: "text-[#525D70]" },
 };
 
-export function ChannelBadge({ channel }: { channel: Channel }) {
+export function ChannelTag({ channel }: { channel: Channel }) {
   const meta = CHANNEL_META[channel];
   return (
-    <span className={`inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium ${meta.badgeClass}`}>
+    <span className={`inline-flex items-center gap-1.5 text-xs font-medium ${meta.textClass}`}>
+      <span className={`h-1.5 w-1.5 rounded-full ${meta.dotClass}`} aria-hidden="true" />
       {meta.label}
     </span>
   );
 }
 
-export function IntentBadge({ intent }: { intent: IntentType }) {
-  const meta = INTENT_META[intent];
-  return (
-    <span className={`inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium ${meta.badgeClass}`}>
-      {meta.label}
-    </span>
-  );
+export function safeExternalHref(rawUrl: string | undefined | null): string | null {
+  if (!rawUrl) return null;
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.protocol === "https:" || parsed.protocol === "http:") {
+      return parsed.toString();
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 export function formatRelativeTime(iso: string): string {

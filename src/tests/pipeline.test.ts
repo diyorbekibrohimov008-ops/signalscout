@@ -12,7 +12,7 @@ describe("End-to-end Monitor Scan Pipeline", () => {
       passwordHash: "hash",
       companyName: "Acme",
       productName: "SignalScout",
-      productDescription: "All-channel buying-intent monitoring at $25/mo flat.",
+      productDescription: "Free all-channel buying-intent monitoring.",
       slackWebhookUrl: "https://hooks.slack.com/services/T00/B00/ZZZ",
     });
 

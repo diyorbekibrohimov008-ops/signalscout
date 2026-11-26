@@ -35,9 +35,10 @@ describe("Authentication & Signed Session Tokens", () => {
     expect(await verifySessionToken(expired, secret)).toBeNull();
   });
 
-  it("parses cookie header values safely", () => {
-    const parsed = parseCookieHeader("foo=bar; ss_session=abc.123; theme=dark");
+  it("parses cookie header values safely including malformed percent-encoding", () => {
+    const parsed = parseCookieHeader("foo=bar; ss_session=abc.123; broken=%E0%A4%A; theme=light");
     expect(parsed.ss_session).toBe("abc.123");
-    expect(parsed.theme).toBe("dark");
+    expect(parsed.broken).toBe("%E0%A4%A");
+    expect(parsed.theme).toBe("light");
   });
 });

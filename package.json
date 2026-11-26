@@ -1,6 +1,7 @@
 {
   "name": "signalscout",
   "version": "1.0.0",
+  "description": "Free buying-intent reader that finds people asking for a tool like yours on Reddit, X, LinkedIn, and Hacker News.",
   "private": true,
   "type": "module",
   "scripts": {

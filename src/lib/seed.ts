@@ -25,9 +25,9 @@ export async function ensureDemoWorkspace(
     companyName: "SignalScout Demo",
     productName: "SignalScout",
     productDescription:
-      "All-channel social buying-intent listener across Reddit, X, LinkedIn, and Hacker News for $25/mo flat with LLM noise filtering and Slack reply outlines.",
+      "Free buying-intent listener across Reddit, X, LinkedIn, and Hacker News with noise filtering and ready-to-edit reply drafts.",
     productUrl: "https://signalscout.app",
-    plan: "pro_flat_25",
+    plan: "free",
   });
 
   const monitor = await db.createMonitor({

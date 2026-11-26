@@ -100,7 +100,13 @@ export function parseCookieHeader(header: string | null): Record<string, string>
     if (eq === -1) continue;
     const key = segment.slice(0, eq).trim();
     const val = segment.slice(eq + 1).trim();
-    if (key) out[key] = decodeURIComponent(val);
+    if (key) {
+      try {
+        out[key] = decodeURIComponent(val);
+      } catch {
+        out[key] = val;
+      }
+    }
   }
   return out;
 }

@@ -1,6 +1,5 @@
 import type {
   AuthMeResponse,
-  BillingResponse,
   Channel,
   DemoEvaluateResponse,
   DispatchResult,
@@ -8,7 +7,6 @@ import type {
   LeadRecord,
   LeadStatus,
   MonitorRecord,
-  PlanTier,
   PublicUser,
   ReplyTone,
   SanitizedWorkspace,
@@ -224,17 +222,5 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ posts: [post] }),
     });
-  },
-
-  getBilling(): Promise<BillingResponse> {
-    return apiFetch<BillingResponse>("/api/billing");
-  },
-
-  subscribeFlat25(): Promise<{ mode: "stripe" | "sandbox"; plan: PlanTier; checkoutUrl?: string }> {
-    return apiFetch("/api/billing/subscribe", { method: "POST" });
-  },
-
-  cancelPlan(): Promise<{ plan: PlanTier }> {
-    return apiFetch("/api/billing/cancel", { method: "POST" });
   },
 };

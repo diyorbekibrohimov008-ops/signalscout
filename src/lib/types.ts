@@ -12,7 +12,7 @@ export type ReplyTone = "founder" | "peer" | "technical";
 
 export type LeadStatus = "new" | "replied" | "dismissed";
 
-export type PlanTier = "trial" | "pro_flat_25" | "canceled";
+export type PlanTier = "free";
 
 export type SourceMode = "live" | "webhook" | "simulation";
 

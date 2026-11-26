@@ -1,7 +1,7 @@
-import React, { useState } from "react";
-import { Check, Copy, ExternalLink, Hash, Sparkles } from "lucide-react";
+import React, { useEffect, useRef, useState } from "react";
+import { Check, Copy, ExternalLink, Hash } from "lucide-react";
 import type { BuyingUrgency, Channel, IntentType, ReplyTone } from "../types";
-import { CHANNEL_META, INTENT_META } from "./badges";
+import { CHANNEL_META, INTENT_META, safeExternalHref } from "./badges";
 
 interface SlackPreviewProps {
   channel: Channel;
@@ -25,7 +25,7 @@ export function SlackPreview({
   intentType,
   confidenceScore,
   buyingUrgency,
-  monitorName = "Buying-Intent Radar",
+  monitorName = "Syften & Octolens Switchers",
   community,
   authorHandle,
   title,
@@ -37,134 +37,123 @@ export function SlackPreview({
   suppressed = false,
 }: SlackPreviewProps) {
   const [copied, setCopied] = useState(false);
+  const timerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current !== null) {
+        window.clearTimeout(timerRef.current);
+      }
+    };
+  }, []);
 
   const channelLabel = CHANNEL_META[channel].label;
   const intentLabel = INTENT_META[intentType].label;
-  const excerpt = body.length > 320 ? `${body.slice(0, 317)}...` : body;
+  const excerpt = body.length > 260 ? `${body.slice(0, 257)}...` : body;
+  const href = safeExternalHref(url);
 
   const copyDraft = async () => {
     try {
       await navigator.clipboard.writeText(replyDraft);
       setCopied(true);
-      setTimeout(() => setCopied(false), 1800);
+      if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+      timerRef.current = window.setTimeout(() => {
+        setCopied(false);
+        timerRef.current = null;
+      }, 1800);
     } catch {
-      // Clipboard may be blocked in restricted contexts
+      // Clipboard blocked
     }
   };
 
   return (
-    <div className="rounded-xl border border-slate-800 bg-slate-900/90 shadow-lg overflow-hidden">
-      {/* Slack channel top chrome */}
-      <div className="flex items-center justify-between border-b border-slate-800 bg-slate-950/70 px-4 py-2.5 text-xs">
-        <div className="flex items-center gap-2 text-slate-300 font-medium">
-          <Hash className="h-3.5 w-3.5 text-slate-400" />
+    <div className="rounded-md border border-[#DDE2EB] bg-white overflow-hidden">
+      <div className="flex items-center justify-between border-b border-[#DDE2EB] bg-[#F8F9FB] px-4 py-2.5 text-xs">
+        <div className="flex items-center gap-1.5 text-[#3B4557] font-medium">
+          <Hash className="h-3.5 w-3.5 text-[#525D70]" />
           <span>buying-intent-alerts</span>
-          <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-slate-400">
-            Slack Block Kit Preview
-          </span>
         </div>
-        {suppressed ? (
-          <span className="rounded-full bg-rose-500/15 border border-rose-500/30 px-2.5 py-0.5 text-[11px] font-medium text-rose-300">
-            Suppressed — Not Sent to Slack
-          </span>
-        ) : (
-          <span className="rounded-full bg-emerald-500/15 border border-emerald-500/30 px-2.5 py-0.5 text-[11px] font-medium text-emerald-300">
-            Instant Slack Alert
-          </span>
-        )}
+        <span className={suppressed ? "text-[#525D70]" : "text-[#1B6E4F] font-medium"}>
+          {suppressed ? "Kept quiet" : "Sample Slack message"}
+        </span>
       </div>
 
-      {/* Slack message card */}
-      <div className="p-4">
-        <div className="flex items-start gap-3">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-emerald-500 to-cyan-500 text-slate-950 font-bold text-sm">
-            SS
+      <div className="p-4 sm:p-5 space-y-3">
+        <div className="flex items-baseline justify-between gap-2">
+          <span className="text-sm font-semibold text-[#161B26]">SignalScout</span>
+          <span className="text-xs text-[#525D70]">just now</span>
+        </div>
+
+        <div
+          className={`border-l-2 pl-4 space-y-3 ${
+            suppressed ? "border-[#DDE2EB] opacity-75" : "border-[#2553B8]"
+          }`}
+        >
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <p className="text-[13.5px] font-semibold text-[#161B26]">
+              {channelLabel} — {intentLabel}
+            </p>
+            <span className="tabular-nums text-xs text-[#525D70]">{confidenceScore} / 100</span>
           </div>
-          <div className="min-w-0 flex-1 space-y-2.5">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-sm font-semibold text-white">SignalScout</span>
-              <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-slate-300">
-                APP
-              </span>
-              <span className="text-xs text-slate-500">just now</span>
+
+          <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+            <div>
+              <dt className="inline text-[#525D70]">Topic: </dt>
+              <dd className="inline text-[#161B26] font-medium">{monitorName}</dd>
             </div>
-
-            <div
-              className={`border-l-4 pl-3 space-y-2.5 ${
-                suppressed ? "border-slate-700 opacity-75" : "border-emerald-400"
-              }`}
-            >
-              <div className="text-sm font-bold text-slate-100">
-                {channelLabel} &bull; {intentLabel} ({confidenceScore}/100)
-              </div>
-
-              <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
-                <div>
-                  <span className="text-slate-400 font-medium">Monitor: </span>
-                  <span className="text-slate-200">{monitorName}</span>
-                </div>
-                <div>
-                  <span className="text-slate-400 font-medium">Source: </span>
-                  <span className="text-slate-200">
-                    {community || channelLabel} ({authorHandle})
-                  </span>
-                </div>
-                <div>
-                  <span className="text-slate-400 font-medium">Urgency: </span>
-                  <span className="uppercase text-slate-200 font-semibold">{buyingUrgency}</span>
-                </div>
-                <div>
-                  <span className="text-slate-400 font-medium">Confidence: </span>
-                  <span className="text-slate-200 font-semibold">{confidenceScore}/100</span>
-                </div>
-              </div>
-
-              <div className="rounded-lg bg-slate-950/70 border border-slate-800/80 p-3 text-xs text-slate-300 space-y-1">
-                {title ? <p className="font-semibold text-slate-100">{title}</p> : null}
-                <p className="whitespace-pre-line leading-relaxed text-slate-300">&gt; {excerpt}</p>
-              </div>
-
-              <div className="flex items-start gap-1.5 text-xs text-slate-400">
-                <Sparkles className="h-3.5 w-3.5 shrink-0 text-emerald-400 mt-0.5" />
-                <p>
-                  <span className="font-medium text-slate-300">Why this passed LLM filter: </span>
-                  {reasoning}
-                </p>
-              </div>
-
-              {!suppressed && (
-                <div className="border-t border-slate-800 pt-2.5 space-y-2">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-semibold text-emerald-300">
-                      Contextual Reply Outline ({replyTone} tone &mdash; edit &amp; post in seconds):
-                    </span>
-                    <button
-                      type="button"
-                      onClick={copyDraft}
-                      className="inline-flex items-center gap-1 rounded-md border border-slate-700 bg-slate-800/80 px-2 py-1 text-[11px] font-medium text-slate-200 hover:bg-slate-700 transition cursor-pointer"
-                    >
-                      {copied ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
-                      {copied ? "Copied" : "Copy Draft"}
-                    </button>
-                  </div>
-                  <pre className="whitespace-pre-wrap rounded-lg border border-slate-800 bg-slate-950 p-3 font-mono text-xs leading-relaxed text-slate-200">
-                    {replyDraft}
-                  </pre>
-                  {url ? (
-                    <a
-                      href={url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center gap-1.5 rounded-md bg-emerald-600 hover:bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-white transition"
-                    >
-                      Open Thread
-                      <ExternalLink className="h-3 w-3" />
-                    </a>
-                  ) : null}
-                </div>
-              )}
+            <div>
+              <dt className="inline text-[#525D70]">Source: </dt>
+              <dd className="inline text-[#161B26]">
+                {community || channelLabel} ({authorHandle})
+              </dd>
             </div>
+            <div>
+              <dt className="inline text-[#525D70]">Urgency: </dt>
+              <dd className="inline capitalize text-[#161B26] font-medium">{buyingUrgency}</dd>
+            </div>
+          </dl>
+
+          <div className="rounded bg-[#F8F9FB] border border-[#EFF2F6] p-3 text-[13px] text-[#242D3D] space-y-1">
+            {title ? <p className="font-semibold text-[#161B26]">{title}</p> : null}
+            <p className="leading-relaxed">{excerpt}</p>
           </div>
+
+          <p className="text-xs text-[#525D70]">
+            <span className="font-medium text-[#161B26]">Why it matched: </span>
+            {reasoning}
+          </p>
+
+          {!suppressed ? (
+            <div className="border-t border-[#EFF2F6] pt-3 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-medium text-[#161B26]">
+                  Reply draft ({replyTone} tone)
+                </span>
+                <button
+                  type="button"
+                  onClick={() => void copyDraft()}
+                  className="inline-flex items-center gap-1 text-xs font-medium text-[#2553B8] hover:underline cursor-pointer"
+                >
+                  {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+                  {copied ? "Copied" : "Copy"}
+                </button>
+              </div>
+              <p className="whitespace-pre-line rounded bg-[#F8F9FB] border border-[#EFF2F6] p-3 text-xs leading-relaxed text-[#242D3D]">
+                {replyDraft}
+              </p>
+              {href ? (
+                <a
+                  href={href}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1 text-xs font-medium text-[#2553B8] hover:underline"
+                >
+                  Open original thread
+                  <ExternalLink className="h-3 w-3" />
+                </a>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       </div>
     </div>

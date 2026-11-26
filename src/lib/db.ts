@@ -126,6 +126,11 @@ function parseJsonField<T>(val: unknown, fallback: T): T {
   return val as T;
 }
 
+function safeIsoDate(val: unknown): string {
+  const date = new Date(String(val ?? ""));
+  return Number.isFinite(date.getTime()) ? date.toISOString() : new Date().toISOString();
+}
+
 function mapUserRow(r: Record<string, unknown>): UserRecord {
   return {
     id: String(r.id),
@@ -133,7 +138,7 @@ function mapUserRow(r: Record<string, unknown>): UserRecord {
     name: String(r.name),
     passwordHash: String(r.password_hash),
     companyName: String(r.company_name ?? ""),
-    createdAt: new Date(String(r.created_at)).toISOString(),
+    createdAt: safeIsoDate(r.created_at),
   };
 }
 
@@ -147,17 +152,17 @@ function mapWorkspaceRow(r: Record<string, unknown>): WorkspaceRecord {
     productUrl: String(r.product_url ?? ""),
     idealCustomer: String(r.ideal_customer ?? ""),
     defaultTone: (r.default_tone as ReplyTone) || "founder",
-    plan: (r.plan as PlanTier) || "trial",
-    trialEndsAt: new Date(String(r.trial_ends_at)).toISOString(),
-    stripeCustomerId: r.stripe_customer_id ? String(r.stripe_customer_id) : null,
-    stripeSubscriptionId: r.stripe_subscription_id ? String(r.stripe_subscription_id) : null,
+    plan: "free",
+    trialEndsAt: safeIsoDate(r.trial_ends_at),
+    stripeCustomerId: null,
+    stripeSubscriptionId: null,
     slackWebhookUrl: String(r.slack_webhook_url ?? ""),
     discordWebhookUrl: String(r.discord_webhook_url ?? ""),
     customOpenaiKey: String(r.custom_openai_key ?? ""),
     xBearerToken: String(r.x_bearer_token ?? ""),
     apifyToken: String(r.apify_token ?? ""),
     ingestSecret: String(r.ingest_secret),
-    createdAt: new Date(String(r.created_at)).toISOString(),
+    createdAt: safeIsoDate(r.created_at),
   };
 }
 
@@ -172,8 +177,8 @@ function mapMonitorRow(r: Record<string, unknown>): MonitorRecord {
     channels: parseJsonField<Channel[]>(r.channels, ["reddit", "x", "linkedin", "hackernews"]),
     minConfidence: Number(r.min_confidence ?? 70),
     isActive: Boolean(r.is_active),
-    lastScannedAt: r.last_scanned_at ? new Date(String(r.last_scanned_at)).toISOString() : null,
-    createdAt: new Date(String(r.created_at)).toISOString(),
+    lastScannedAt: r.last_scanned_at ? safeIsoDate(r.last_scanned_at) : null,
+    createdAt: safeIsoDate(r.created_at),
   };
 }
 
@@ -205,8 +210,8 @@ function mapLeadRow(r: Record<string, unknown>): LeadRecord {
     alertSentSlack: Boolean(r.alert_sent_slack),
     alertSentDiscord: Boolean(r.alert_sent_discord),
     sourceMode: (r.source_mode as SourceMode) || "live",
-    publishedAt: new Date(String(r.published_at)).toISOString(),
-    createdAt: new Date(String(r.created_at)).toISOString(),
+    publishedAt: safeIsoDate(r.published_at),
+    createdAt: safeIsoDate(r.created_at),
   };
 }
 
@@ -279,7 +284,7 @@ export class PostgresDb implements SignalScoutDb {
     const userId = `usr_${randomUUID().slice(0, 12)}`;
     const workspaceId = `ws_${randomUUID().slice(0, 12)}`;
     const ingestSecret = `ss_wh_${randomBytes(16).toString("hex")}`;
-    const trialEndsAt = new Date(Date.now() + 14 * 86400_000).toISOString();
+    const trialEndsAt = new Date().toISOString();
 
     const client = await this.db.pool.connect();
     try {
@@ -304,21 +309,10 @@ export class PostgresDb implements SignalScoutDb {
           input.productName?.trim() ?? "",
           input.productDescription?.trim() ?? "",
           input.productUrl?.trim() ?? "",
-          input.plan ?? "trial",
+          "free",
           trialEndsAt,
           input.slackWebhookUrl?.trim() ?? "",
           ingestSecret,
-        ],
-      );
-      await client.query(
-        `INSERT INTO billing_events (id, workspace_id, event_type, amount_cents, description)
-         VALUES ($1, $2, $3, $4, $5)`,
-        [
-          `bil_${randomUUID().slice(0, 12)}`,
-          workspaceId,
-          "trial_started",
-          0,
-          "Started 14-day All-Channel Flat trial (Reddit, X, LinkedIn, HN included)",
         ],
       );
       await client.query("COMMIT");
@@ -379,7 +373,7 @@ export class PostgresDb implements SignalScoutDb {
         w.apify_token AS w_apify_token, w.ingest_secret AS w_ingest_secret, w.created_at AS w_created_at
       FROM monitors m
       JOIN workspaces w ON w.id = m.workspace_id
-      WHERE m.is_active = TRUE AND w.plan <> 'canceled'
+      WHERE m.is_active = TRUE
       ORDER BY m.last_scanned_at ASC NULLS FIRST
       LIMIT 25`;
 
@@ -507,7 +501,7 @@ export class PostgresDb implements SignalScoutDb {
   ): Promise<LeadRecord[]> {
     const limit = opts.limit ?? 100;
     const rows = await this.db.sql`
-      SELECT * FROM leads WHERE workspace_id = ${workspaceId} ORDER BY created_at DESC LIMIT 300`;
+      SELECT * FROM leads WHERE workspace_id = ${workspaceId} ORDER BY published_at DESC, created_at DESC LIMIT 300`;
     let items = rows.map((r) => mapLeadRow(r as Record<string, unknown>));
     if (opts.onlyNoise) {
       items = items.filter((l) => l.isFilteredNoise);
@@ -671,8 +665,8 @@ export class MemoryDb implements SignalScoutDb {
       productUrl: input.productUrl?.trim() ?? "",
       idealCustomer: "",
       defaultTone: "founder",
-      plan: input.plan ?? "trial",
-      trialEndsAt: new Date(Date.now() + 14 * 86400_000).toISOString(),
+      plan: "free",
+      trialEndsAt: now,
       stripeCustomerId: null,
       stripeSubscriptionId: null,
       slackWebhookUrl: input.slackWebhookUrl?.trim() ?? "",
@@ -685,14 +679,6 @@ export class MemoryDb implements SignalScoutDb {
     };
     this.users.set(user.id, user);
     this.workspaces.set(workspace.id, workspace);
-    this.billingEvents.unshift({
-      id: `bil_${randomUUID().slice(0, 12)}`,
-      workspaceId: workspace.id,
-      eventType: "trial_started",
-      amountCents: 0,
-      description: "Started 14-day All-Channel Flat trial",
-      createdAt: now,
-    });
     return { user, workspace };
   }
 
@@ -715,7 +701,7 @@ export class MemoryDb implements SignalScoutDb {
     for (const m of this.monitors.values()) {
       if (!m.isActive) continue;
       const ws = this.workspaces.get(m.workspaceId);
-      if (ws && ws.plan !== "canceled") {
+      if (ws) {
         out.push({ monitor: m, workspace: ws });
       }
     }
@@ -795,7 +781,7 @@ export class MemoryDb implements SignalScoutDb {
   ): Promise<LeadRecord[]> {
     let items = Array.from(this.leads.values())
       .filter((l) => l.workspaceId === workspaceId)
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+      .sort((a, b) => b.publishedAt.localeCompare(a.publishedAt) || b.createdAt.localeCompare(a.createdAt));
 
     if (opts.onlyNoise) {
       items = items.filter((l) => l.isFilteredNoise);

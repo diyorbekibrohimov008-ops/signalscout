@@ -1,20 +1,35 @@
-# SignalScout — All-Channel Buying-Intent Listening ($25/mo Flat)
+# SignalScout — Free Buying-Intent Reader
 
-SignalScout monitors **Reddit, X, LinkedIn, and Hacker News** for high-intent customer conversations (product recommendation requests, competitor complaints, explicit purchasing intent), filters out noisy keyword spam with a two-stage LLM intent pipeline, and delivers actionable Slack & Discord alerts containing an authentic **Contextual Reply Outline**.
+Find people asking for a tool like yours on **Reddit, X, LinkedIn, and Hacker News** — 100% free.
 
-> [!WARNING]
-> **Project Status — Work in Progress (Not Fully Ready)**
-> This project is currently under active development and is **not fully ready for production**. Some parts, features, or workflow steps will fail or behave unexpectedly. We are actively working on fixing all remaining issues.
+SignalScout scans social threads for recommendation requests, competitor frustrations, and active buying questions, filters out promotional noise and listicles with a two-stage intent pipeline, explains in quiet margin notes why each post was flagged, drafts an editable non-salesy reply, and sends alerts to Slack or Discord.
 
-## Why Teams Switch from Syften & Octolens
-- **All-Channel Flat Pricing ($25/mo):** Reddit, X, LinkedIn, and Hacker News included with zero channel add-ons.
-- **Two-Stage LLM Intent Filtering:** Drops job posts, promo spam, and irrelevant keyword hits before they ever hit Slack (while logging blocked noise in an audit tab).
-- **Contextual Reply Assistant:** Drafts a non-salesy 3-part reply (Hook -> Value Points -> Soft Disclosure) right inside each Slack notification.
+## 100% Free — All Channels Included
+
+| Capability | SignalScout | Syften | Octolens |
+| --- | --- | --- | --- |
+| Pricing | **$0 (100% free)** | $29.95/mo base + $40/mo X + $20/mo YouTube | Tiered seat & volume plans |
+| Reddit & Hacker News live scanning | Included (10-min cron + on-demand) | Included | Included |
+| X & LinkedIn coverage | Included ($0 add-on via API or webhook bridge) | +$40/mo X add-on | Plan-gated |
+| Two-stage LLM noise filter | Included + Filtered Out log | Keyword rules | AI relevance scoring |
+| Contextual reply drafts | Included (Hook + helpful points + soft disclosure) | Manual | Alert-first |
 
 ## Architecture
-- **Frontend:** Vite + React + TypeScript + Tailwind CSS (`src/client/*`)
+- **Frontend:** Vite + React + TypeScript + Tailwind CSS (`src/client/*`) — calm light reading desk layout
 - **Backend API & Cron:**
-  - **Netlify:** `netlify/functions/api.mts` (`/api/*`) + `netlify/functions/cron-poll.mts` (10-minute scheduled monitor) + `netlify.toml`
+  - **Netlify:** `netlify/functions/api.mts` (`/api/*`) + `netlify/functions/cron-poll.mts` (10-minute scheduled scan) + `netlify.toml`
   - **Vercel:** `api/index.ts` (Web API `GET`/`POST`/`PATCH`/`PUT`/`DELETE` handler) + `vercel.json`
 - **Database:** Managed Postgres (`@netlify/database` with SQL migrations in `netlify/database/migrations/`) with automatic fallback to `MemoryDb` when `NETLIFY_DB_URL` / `DATABASE_URL` is not configured
 - **LLM Engine:** OpenAI SDK / Netlify AI Gateway / custom OpenAI key / deterministic heuristic scorer
+
+## Quick Start
+```bash
+npm install
+npm run dev
+```
+Run tests, typecheck, and production build:
+```bash
+npm test
+npx tsc --noEmit
+npm run build
+```

@@ -8,15 +8,23 @@ import {
   verifyPassword,
   verifySessionToken,
 } from "./auth";
-import { cancelSubscription, subscribeFlat25, verifyStripeWebhookSignature } from "./billing";
+import { getFreePlanStatus } from "./billing";
 import type { SignalScoutDb } from "./db";
 import { getEnv } from "./env";
 import { classifyIntent, runStage1Filter } from "./intent";
-import { buildSlackPayload, dispatchWebhookAlerts } from "./notifier";
+import { buildSlackPayload, dispatchWebhookAlerts, isSafeWebhookEndpoint } from "./notifier";
 import { processCandidatePosts, regenerateLeadReply, runMonitorScan } from "./pipeline";
 import { generateReplyOutline } from "./reply";
 import { ensureDemoWorkspace } from "./seed";
-import type { Channel, LeadRecord, LeadStatus, MonitorRecord, RawSocialPost, ReplyTone, WorkspaceRecord } from "./types";
+import type {
+  Channel,
+  LeadRecord,
+  LeadStatus,
+  MonitorRecord,
+  RawSocialPost,
+  ReplyTone,
+  WorkspaceRecord,
+} from "./types";
 
 function json(data: unknown, status: number = 200, headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(data), {
@@ -37,8 +45,7 @@ function sanitizeWorkspace(ws: WorkspaceRecord) {
     productUrl: ws.productUrl,
     idealCustomer: ws.idealCustomer,
     defaultTone: ws.defaultTone,
-    plan: ws.plan,
-    trialEndsAt: ws.trialEndsAt,
+    plan: "free" as const,
     slackWebhookUrl: ws.slackWebhookUrl,
     discordWebhookUrl: ws.discordWebhookUrl,
     ingestSecret: ws.ingestSecret,
@@ -51,7 +58,11 @@ function sanitizeWorkspace(ws: WorkspaceRecord) {
 
 async function readJsonBody<T>(req: Request): Promise<T | null> {
   try {
-    return (await req.json()) as T;
+    const parsed: unknown = await req.json();
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return null;
+    }
+    return parsed as T;
   } catch {
     return null;
   }
@@ -69,9 +80,16 @@ async function requireAuth(req: Request, db: SignalScoutDb) {
   return { user, workspace };
 }
 
+function asTrimmedString(val: unknown): string {
+  return typeof val === "string" ? val.trim() : "";
+}
+
 function parseTerms(input: unknown): string[] {
   if (Array.isArray(input)) {
-    return input.map((v) => String(v).trim()).filter(Boolean);
+    return input
+      .filter((v): v is string | number => typeof v === "string" || typeof v === "number")
+      .map((v) => String(v).trim())
+      .filter(Boolean);
   }
   if (typeof input === "string") {
     return input
@@ -82,11 +100,50 @@ function parseTerms(input: unknown): string[] {
   return [];
 }
 
+function parseConfidence(input: unknown, fallback: number = 70): number {
+  const num = Number(input);
+  if (!Number.isFinite(num)) return fallback;
+  return Math.max(40, Math.min(98, Math.round(num)));
+}
+
+function parseIsoTimestamp(input: unknown): string {
+  if (typeof input === "string" && input.trim()) {
+    const ms = Date.parse(input);
+    if (Number.isFinite(ms)) {
+      return new Date(ms).toISOString();
+    }
+  }
+  return new Date().toISOString();
+}
+
+function parseSafeExternalUrl(input: unknown, fallback: string): string {
+  const raw = asTrimmedString(input);
+  if (!raw) return fallback;
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol === "https:" || parsed.protocol === "http:") {
+      return parsed.toString();
+    }
+  } catch {
+    // Fall back to safe URL
+  }
+  return fallback;
+}
+
 const ALLOWED_CHANNELS: Channel[] = ["reddit", "x", "linkedin", "hackernews"];
+const ALLOWED_STATUSES: LeadStatus[] = ["new", "replied", "dismissed"];
+const ALLOWED_TONES: ReplyTone[] = ["founder", "peer", "technical"];
+
 function parseChannels(input: unknown): Channel[] {
   if (!Array.isArray(input)) return [...ALLOWED_CHANNELS];
   const filtered = input.filter((c): c is Channel => ALLOWED_CHANNELS.includes(c as Channel));
   return filtered.length > 0 ? filtered : [...ALLOWED_CHANNELS];
+}
+
+function parseTone(input: unknown, fallback: ReplyTone = "founder"): ReplyTone {
+  return typeof input === "string" && ALLOWED_TONES.includes(input as ReplyTone)
+    ? (input as ReplyTone)
+    : fallback;
 }
 
 export async function handleApiRequest(
@@ -105,14 +162,14 @@ export async function handleApiRequest(
       return json({
         ok: true,
         service: "SignalScout",
-        database: getEnv("NETLIFY_DB_URL") ? "postgres" : "memory",
+        free: true,
+        database: getEnv("NETLIFY_DB_URL") || getEnv("DATABASE_URL") ? "postgres" : "memory",
         aiGatewayActive: Boolean(getEnv("OPENAI_BASE_URL") || getEnv("OPENAI_API_KEY")),
-        stripeConfigured: Boolean(getEnv("STRIPE_SECRET_KEY") && getEnv("STRIPE_PRICE_ID_FLAT_25")),
         timestamp: new Date().toISOString(),
       });
     }
 
-    // 2. Public interactive intent-filter & Slack preview playground
+    // 2. Public interactive intent-filter & Slack preview evaluator
     if (method === "POST" && path === "/api/demo/evaluate") {
       const body = await readJsonBody<{
         channel?: Channel;
@@ -127,18 +184,25 @@ export async function handleApiRequest(
         tone?: ReplyTone;
       }>(req);
 
-      if (!body || (!body.body?.trim() && !body.title?.trim())) {
-        return json({ error: "Provide post title or body to evaluate." }, 400);
+      const postTitle = asTrimmedString(body?.title);
+      const postBody = asTrimmedString(body?.body);
+      if (!body || (!postBody && !postTitle)) {
+        return json({ error: "Enter a post title or body to evaluate." }, 400);
       }
 
-      const channel: Channel = ALLOWED_CHANNELS.includes(body.channel as Channel) ? (body.channel as Channel) : "reddit";
+      const channel: Channel = ALLOWED_CHANNELS.includes(body.channel as Channel)
+        ? (body.channel as Channel)
+        : "reddit";
+      const handle = asTrimmedString(body.authorHandle) || (channel === "x" ? "@prospect" : "u/prospect");
+      const tone = parseTone(body.tone, "founder");
+
       const post: RawSocialPost = {
         channel,
         externalId: `playground_${Date.now()}`,
         author: "prospect",
-        authorHandle: body.authorHandle?.trim() || (channel === "x" ? "@prospect" : "u/prospect"),
-        title: body.title?.trim() || "",
-        body: body.body?.trim() || "",
+        authorHandle: handle,
+        title: postTitle,
+        body: postBody,
         url:
           channel === "hackernews"
             ? "https://news.ycombinator.com/item?id=42000"
@@ -152,12 +216,15 @@ export async function handleApiRequest(
         sourceMode: "simulation",
       };
 
+      const parsedKeywords = parseTerms(body.keywords);
+      const parsedCompetitors = parseTerms(body.competitors);
+
       const tempMonitor: MonitorRecord = {
         id: "mon_playground",
         workspaceId: "ws_playground",
-        name: "Playground Monitor",
-        keywords: parseTerms(body.keywords).length > 0 ? parseTerms(body.keywords) : ["social listening", "monitoring"],
-        competitors: parseTerms(body.competitors).length > 0 ? parseTerms(body.competitors) : ["syften", "octolens"],
+        name: "Topic Preview",
+        keywords: parsedKeywords.length > 0 ? parsedKeywords : ["social listening", "monitoring"],
+        competitors: parsedCompetitors.length > 0 ? parsedCompetitors : ["syften", "octolens"],
         negativeKeywords: parseTerms(body.negativeKeywords),
         channels: [...ALLOWED_CHANNELS],
         minConfidence: 70,
@@ -169,15 +236,15 @@ export async function handleApiRequest(
       const tempWorkspace: WorkspaceRecord = {
         id: "ws_playground",
         ownerUserId: "usr_playground",
-        name: "Playground",
-        productName: body.productName?.trim() || "SignalScout",
+        name: "Preview",
+        productName: asTrimmedString(body.productName) || "SignalScout",
         productDescription:
-          body.productDescription?.trim() ||
-          "All-channel buying-intent listening at $25/mo flat with LLM filtering and Slack reply outlines.",
+          asTrimmedString(body.productDescription) ||
+          "Free buying-intent listening across Reddit, X, LinkedIn, and Hacker News with noise filtering and ready-to-edit reply drafts.",
         productUrl: "https://signalscout.app",
         idealCustomer: "SaaS founders",
-        defaultTone: body.tone || "founder",
-        plan: "pro_flat_25",
+        defaultTone: tone,
+        plan: "free",
         trialEndsAt: new Date().toISOString(),
         stripeCustomerId: null,
         stripeSubscriptionId: null,
@@ -203,7 +270,7 @@ export async function handleApiRequest(
             classifierMode: "heuristic" as const,
           };
 
-      const reply = generateReplyOutline(post, analysis, tempWorkspace, body.tone || "founder");
+      const reply = generateReplyOutline(post, analysis, tempWorkspace, tone);
       const previewLead: LeadRecord = {
         id: "lead_preview",
         workspaceId: tempWorkspace.id,
@@ -246,31 +313,39 @@ export async function handleApiRequest(
     // 3. Auth endpoints
     if (method === "POST" && path === "/api/auth/register") {
       const body = await readJsonBody<{
-        email?: string;
-        name?: string;
-        password?: string;
-        companyName?: string;
-        productName?: string;
-        productDescription?: string;
+        email?: unknown;
+        name?: unknown;
+        password?: unknown;
+        companyName?: unknown;
+        productName?: unknown;
+        productDescription?: unknown;
       }>(req);
 
-      if (!body?.email?.includes("@") || !body?.password || body.password.length < 6 || !body?.name?.trim()) {
-        return json({ error: "Name, valid email, and password (6+ chars) are required." }, 400);
+      const email = asTrimmedString(body?.email);
+      const name = asTrimmedString(body?.name);
+      const password = typeof body?.password === "string" ? body.password : "";
+      const companyName = asTrimmedString(body?.companyName);
+      const productName = asTrimmedString(body?.productName);
+      const productDescription = asTrimmedString(body?.productDescription);
+
+      if (!email.includes("@") || password.length < 6 || !name) {
+        return json({ error: "Name, valid email, and password (6+ characters) are required." }, 400);
       }
 
-      const existing = await db.findUserByEmail(body.email);
+      const existing = await db.findUserByEmail(email);
       if (existing) {
         return json({ error: "An account with this email already exists." }, 409);
       }
 
-      const passwordHash = await hashPassword(body.password);
+      const passwordHash = await hashPassword(password);
       const { user, workspace } = await db.createUserWithWorkspace({
-        email: body.email,
-        name: body.name,
+        email,
+        name,
         passwordHash,
-        companyName: body.companyName,
-        productName: body.productName || body.companyName || "My Product",
-        productDescription: body.productDescription,
+        companyName: companyName || undefined,
+        productName: productName || companyName || "My Product",
+        productDescription: productDescription || undefined,
+        plan: "free",
       });
 
       const token = await signSessionToken({ userId: user.id, workspaceId: workspace.id, email: user.email });
@@ -282,12 +357,15 @@ export async function handleApiRequest(
     }
 
     if (method === "POST" && path === "/api/auth/login") {
-      const body = await readJsonBody<{ email?: string; password?: string }>(req);
-      if (!body?.email || !body?.password) {
+      const body = await readJsonBody<{ email?: unknown; password?: unknown }>(req);
+      const email = asTrimmedString(body?.email);
+      const password = typeof body?.password === "string" ? body.password : "";
+
+      if (!email || !password) {
         return json({ error: "Email and password are required." }, 400);
       }
-      const user = await db.findUserByEmail(body.email);
-      if (!user || !(await verifyPassword(body.password, user.passwordHash))) {
+      const user = await db.findUserByEmail(email);
+      if (!user || !(await verifyPassword(password, user.passwordHash))) {
         return json({ error: "Invalid email or password." }, 401);
       }
       const workspace = await db.getWorkspaceByOwner(user.id);
@@ -328,42 +406,50 @@ export async function handleApiRequest(
       }
 
       const body = await readJsonBody<{
-        monitorId?: string;
-        posts?: Array<{
-          channel: Channel;
-          externalId?: string;
-          author?: string;
-          authorHandle?: string;
-          title?: string;
-          body: string;
-          url?: string;
-          community?: string;
-          publishedAt?: string;
-        }>;
+        monitorId?: unknown;
+        posts?: unknown;
       }>(req);
 
-      const monitors = await db.listMonitors(workspace.id);
-      const targetMonitor =
-        (body?.monitorId ? monitors.find((m) => m.id === body.monitorId) : monitors.find((m) => m.isActive)) ??
-        monitors[0];
-      if (!targetMonitor) {
-        return json({ error: "No monitor found in workspace to route ingested posts." }, 400);
+      if (!body || !Array.isArray(body.posts)) {
+        return json({ error: "Request body must include a posts array." }, 400);
       }
 
-      const rawPosts: RawSocialPost[] = (body?.posts ?? [])
-        .filter((p) => p && typeof p.body === "string" && p.body.trim().length > 0)
-        .map((p, idx) => ({
-          channel: ALLOWED_CHANNELS.includes(p.channel) ? p.channel : "x",
-          externalId: p.externalId?.trim() || `wh_${Date.now()}_${idx}`,
-          author: p.author?.trim() || "Author",
-          authorHandle: p.authorHandle?.trim() || p.author?.trim() || "@author",
-          title: p.title?.trim() || "",
-          body: p.body.trim(),
-          url: p.url?.trim() || "https://signalscout.app",
-          community: p.community?.trim() || p.channel.toUpperCase(),
-          publishedAt: p.publishedAt || new Date().toISOString(),
+      const monitors = await db.listMonitors(workspace.id);
+      const requestedMonitorId = asTrimmedString(body.monitorId);
+      const targetMonitor =
+        (requestedMonitorId ? monitors.find((m) => m.id === requestedMonitorId) : monitors.find((m) => m.isActive)) ??
+        monitors[0];
+      if (!targetMonitor) {
+        return json({ error: "Create a topic to watch before sending posts via webhook." }, 400);
+      }
+
+      const rawPosts: RawSocialPost[] = [];
+      for (let idx = 0; idx < body.posts.length; idx++) {
+        const entry = body.posts[idx];
+        if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+        const p = entry as Record<string, unknown>;
+        const postBody = asTrimmedString(p.body);
+        if (!postBody) continue;
+
+        const ch: Channel = ALLOWED_CHANNELS.includes(p.channel as Channel) ? (p.channel as Channel) : "x";
+        const author = asTrimmedString(p.author) || "Author";
+        rawPosts.push({
+          channel: ch,
+          externalId: asTrimmedString(p.externalId) || `wh_${Date.now()}_${idx}`,
+          author,
+          authorHandle: asTrimmedString(p.authorHandle) || author,
+          title: asTrimmedString(p.title),
+          body: postBody,
+          url: parseSafeExternalUrl(p.url, "https://signalscout.app"),
+          community: asTrimmedString(p.community) || ch.toUpperCase(),
+          publishedAt: parseIsoTimestamp(p.publishedAt),
           sourceMode: "webhook",
-        }));
+        });
+      }
+
+      if (rawPosts.length === 0) {
+        return json({ error: "Provide at least one post with non-empty body text." }, 400);
+      }
 
       const scanRun = await processCandidatePosts(
         db,
@@ -372,7 +458,7 @@ export async function handleApiRequest(
         rawPosts,
         {
           webhook: {
-            channel: rawPosts[0]?.channel || "x",
+            channel: rawPosts[0].channel,
             status: "live",
             fetched: rawPosts.length,
             note: `Ingested ${rawPosts.length} post(s) via webhook bridge`,
@@ -382,38 +468,6 @@ export async function handleApiRequest(
       );
 
       return json({ ok: true, scanRun });
-    }
-
-    // 5. Stripe Webhook receiver
-    if (method === "POST" && path === "/api/billing/stripe-webhook") {
-      const secret = getEnv("STRIPE_WEBHOOK_SECRET") || "";
-      const rawBody = await req.text();
-      if (secret && !verifyStripeWebhookSignature(rawBody, req.headers.get("stripe-signature"), secret)) {
-        return json({ error: "Invalid Stripe signature." }, 400);
-      }
-      const event = JSON.parse(rawBody) as {
-        type?: string;
-        data?: { object?: { client_reference_id?: string; metadata?: { workspace_id?: string }; customer?: string; subscription?: string } };
-      };
-      const obj = event.data?.object;
-      const wsId = obj?.client_reference_id || obj?.metadata?.workspace_id;
-      if (wsId && event.type === "checkout.session.completed") {
-        const ws = await db.getWorkspaceById(wsId);
-        if (ws) {
-          await db.updateWorkspace(ws.id, {
-            plan: "pro_flat_25",
-            stripeCustomerId: obj?.customer ?? null,
-            stripeSubscriptionId: obj?.subscription ?? null,
-          });
-          await db.insertBillingEvent({
-            workspaceId: ws.id,
-            eventType: "stripe_checkout_completed",
-            amountCents: 2500,
-            description: "Subscribed to All-Channel Flat Plan ($25/mo via Stripe)",
-          });
-        }
-      }
-      return json({ received: true });
     }
 
     // All endpoints below require authenticated session
@@ -438,7 +492,7 @@ export async function handleApiRequest(
       });
     }
 
-    // Monitors CRUD
+    // Monitors (Topics to watch) CRUD
     if (method === "GET" && path === "/api/monitors") {
       const monitors = await db.listMonitors(workspace.id);
       return json({ monitors });
@@ -446,70 +500,81 @@ export async function handleApiRequest(
 
     if (method === "POST" && path === "/api/monitors") {
       const body = await readJsonBody<{
-        name?: string;
-        keywords?: string[] | string;
-        competitors?: string[] | string;
-        negativeKeywords?: string[] | string;
-        channels?: Channel[];
-        minConfidence?: number;
+        name?: unknown;
+        keywords?: unknown;
+        competitors?: unknown;
+        negativeKeywords?: unknown;
+        channels?: unknown;
+        minConfidence?: unknown;
       }>(req);
 
+      const name = asTrimmedString(body?.name);
       const keywords = parseTerms(body?.keywords);
       const competitors = parseTerms(body?.competitors);
-      if (!body?.name?.trim() || (keywords.length === 0 && competitors.length === 0)) {
-        return json({ error: "Monitor name and at least one keyword or competitor are required." }, 400);
+      if (!name || (keywords.length === 0 && competitors.length === 0)) {
+        return json({ error: "Give this topic a name and at least one keyword or competitor." }, 400);
       }
 
       const monitor = await db.createMonitor({
         workspaceId: workspace.id,
-        name: body.name,
+        name,
         keywords,
         competitors,
-        negativeKeywords: parseTerms(body.negativeKeywords),
-        channels: parseChannels(body.channels),
-        minConfidence: Math.max(40, Math.min(98, Number(body.minConfidence ?? 70))),
+        negativeKeywords: parseTerms(body?.negativeKeywords),
+        channels: parseChannels(body?.channels),
+        minConfidence: parseConfidence(body?.minConfidence, 70),
       });
       return json({ monitor }, 201);
     }
 
     const monitorMatch = path.match(/^\/api\/monitors\/([^/]+)$/);
     if (monitorMatch) {
-      const monitorId = monitorMatch[1];
+      const monitorId = decodeURIComponent(monitorMatch[1]);
       if (method === "PATCH") {
         const body = await readJsonBody<{
-          name?: string;
-          keywords?: string[] | string;
-          competitors?: string[] | string;
-          negativeKeywords?: string[] | string;
-          channels?: Channel[];
-          minConfidence?: number;
-          isActive?: boolean;
+          name?: unknown;
+          keywords?: unknown;
+          competitors?: unknown;
+          negativeKeywords?: unknown;
+          channels?: unknown;
+          minConfidence?: unknown;
+          isActive?: unknown;
         }>(req);
         if (!body) return json({ error: "Invalid JSON body." }, 400);
 
         const patch: Partial<MonitorRecord> = {};
-        if (body.name !== undefined) patch.name = body.name.trim();
+        if (body.name !== undefined) {
+          const trimmed = asTrimmedString(body.name);
+          if (!trimmed) return json({ error: "Topic name cannot be empty." }, 400);
+          patch.name = trimmed;
+        }
         if (body.keywords !== undefined) patch.keywords = parseTerms(body.keywords);
         if (body.competitors !== undefined) patch.competitors = parseTerms(body.competitors);
         if (body.negativeKeywords !== undefined) patch.negativeKeywords = parseTerms(body.negativeKeywords);
         if (body.channels !== undefined) patch.channels = parseChannels(body.channels);
-        if (body.minConfidence !== undefined) patch.minConfidence = Math.max(40, Math.min(98, Number(body.minConfidence)));
+        if (body.minConfidence !== undefined) patch.minConfidence = parseConfidence(body.minConfidence, 70);
         if (body.isActive !== undefined) patch.isActive = Boolean(body.isActive);
 
         const updated = await db.updateMonitor(workspace.id, monitorId, patch);
-        return updated ? json({ monitor: updated }) : json({ error: "Monitor not found." }, 404);
+        return updated ? json({ monitor: updated }) : json({ error: "Topic not found." }, 404);
       }
 
       if (method === "DELETE") {
         const deleted = await db.deleteMonitor(workspace.id, monitorId);
-        return deleted ? json({ ok: true }) : json({ error: "Monitor not found." }, 404);
+        return deleted ? json({ ok: true }) : json({ error: "Topic not found." }, 404);
       }
     }
 
-    // Leads Inbox & Noise Audit
+    // Leads & Filtered Out Audit
     if (method === "GET" && path === "/api/leads") {
-      const channel = (url.searchParams.get("channel") as Channel | "all") || "all";
-      const status = (url.searchParams.get("status") as LeadStatus | "all") || "all";
+      const rawChannel = url.searchParams.get("channel") || "all";
+      const channel: Channel | "all" = ALLOWED_CHANNELS.includes(rawChannel as Channel)
+        ? (rawChannel as Channel)
+        : "all";
+      const rawStatus = url.searchParams.get("status") || "all";
+      const status: LeadStatus | "all" = ALLOWED_STATUSES.includes(rawStatus as LeadStatus)
+        ? (rawStatus as LeadStatus)
+        : "all";
       const filter = url.searchParams.get("filter") || "intent";
 
       const [leads, noise, stats] = await Promise.all([
@@ -525,25 +590,33 @@ export async function handleApiRequest(
 
     const leadRegenMatch = path.match(/^\/api\/leads\/([^/]+)\/regenerate-reply$/);
     if (leadRegenMatch && method === "POST") {
-      const lead = await db.getLead(workspace.id, leadRegenMatch[1]);
+      const lead = await db.getLead(workspace.id, decodeURIComponent(leadRegenMatch[1]));
       if (!lead) return json({ error: "Lead not found." }, 404);
-      const body = await readJsonBody<{ tone?: ReplyTone }>(req);
-      const tone: ReplyTone =
-        body?.tone === "peer" || body?.tone === "technical" || body?.tone === "founder"
-          ? body.tone
-          : workspace.defaultTone;
+      const body = await readJsonBody<{ tone?: unknown }>(req);
+      const tone = parseTone(body?.tone, workspace.defaultTone);
       const updated = await regenerateLeadReply(db, workspace, lead, tone);
       return json({ lead: updated });
     }
 
     const leadSlackMatch = path.match(/^\/api\/leads\/([^/]+)\/send-slack$/);
     if (leadSlackMatch && method === "POST") {
-      const lead = await db.getLead(workspace.id, leadSlackMatch[1]);
+      const lead = await db.getLead(workspace.id, decodeURIComponent(leadSlackMatch[1]));
       if (!lead) return json({ error: "Lead not found." }, 404);
-      const monitor = await db.getMonitor(workspace.id, lead.monitorId);
-      if (!monitor) return json({ error: "Monitor not found." }, 404);
+      const monitor: MonitorRecord = (await db.getMonitor(workspace.id, lead.monitorId)) ?? {
+        id: lead.monitorId,
+        workspaceId: workspace.id,
+        name: "Archived Topic",
+        keywords: [],
+        competitors: [],
+        negativeKeywords: [],
+        channels: [lead.channel],
+        minConfidence: 70,
+        isActive: false,
+        lastScannedAt: null,
+        createdAt: lead.createdAt,
+      };
       if (!workspace.slackWebhookUrl && !workspace.discordWebhookUrl) {
-        return json({ error: "Configure a Slack or Discord webhook URL in Integrations first." }, 400);
+        return json({ error: "Add a Slack or Discord webhook URL in Notifications first." }, 400);
       }
       const dispatch = await dispatchWebhookAlerts(lead, monitor, workspace, fetchFn);
       const updated = await db.updateLead(workspace.id, lead.id, {
@@ -555,36 +628,37 @@ export async function handleApiRequest(
 
     const leadMatch = path.match(/^\/api\/leads\/([^/]+)$/);
     if (leadMatch && method === "PATCH") {
-      const body = await readJsonBody<{ status?: LeadStatus; replyDraft?: string }>(req);
+      const body = await readJsonBody<{ status?: unknown; replyDraft?: unknown }>(req);
       if (!body) return json({ error: "Invalid JSON body." }, 400);
       const patch: Partial<LeadRecord> = {};
-      if (body.status && ["new", "replied", "dismissed"].includes(body.status)) {
-        patch.status = body.status;
+      if (typeof body.status === "string" && ALLOWED_STATUSES.includes(body.status as LeadStatus)) {
+        patch.status = body.status as LeadStatus;
       }
       if (typeof body.replyDraft === "string") {
         patch.replyDraft = body.replyDraft;
       }
-      const updated = await db.updateLead(workspace.id, leadMatch[1], patch);
+      const updated = await db.updateLead(workspace.id, decodeURIComponent(leadMatch[1]), patch);
       return updated ? json({ lead: updated }) : json({ error: "Lead not found." }, 404);
     }
 
     // On-demand scan
     if (method === "POST" && path === "/api/scan") {
-      const body = await readJsonBody<{ monitorId?: string; includeSimulation?: boolean }>(req);
+      const body = await readJsonBody<{ monitorId?: unknown; includeSimulation?: unknown }>(req);
       const monitors = await db.listMonitors(workspace.id);
-      const targets = body?.monitorId
-        ? monitors.filter((m) => m.id === body.monitorId)
+      const requestedId = asTrimmedString(body?.monitorId);
+      const targets = requestedId
+        ? monitors.filter((m) => m.id === requestedId)
         : monitors.filter((m) => m.isActive);
 
       if (targets.length === 0) {
-        return json({ error: "No active monitors found. Create or enable a monitor first." }, 400);
+        return json({ error: "No active topics to scan. Add or resume a topic first." }, 400);
       }
 
       const runs = [];
       for (const mon of targets.slice(0, 5)) {
         const run = await runMonitorScan(db, workspace, mon, {
           triggerType: "manual",
-          includeSimulation: body?.includeSimulation ?? true,
+          includeSimulation: typeof body?.includeSimulation === "boolean" ? body.includeSimulation : true,
           fetchFn,
         });
         runs.push(run);
@@ -593,57 +667,63 @@ export async function handleApiRequest(
       return json({ ok: true, runs, stats });
     }
 
-    // Settings & Webhook tests
+    // Settings & Notifications
     if (method === "GET" && path === "/api/settings") {
       return json({ workspace: sanitizeWorkspace(workspace) });
     }
 
     if (method === "PATCH" && path === "/api/settings") {
       const body = await readJsonBody<{
-        name?: string;
-        productName?: string;
-        productDescription?: string;
-        productUrl?: string;
-        idealCustomer?: string;
-        defaultTone?: ReplyTone;
-        slackWebhookUrl?: string;
-        discordWebhookUrl?: string;
-        customOpenaiKey?: string;
-        xBearerToken?: string;
-        apifyToken?: string;
+        name?: unknown;
+        productName?: unknown;
+        productDescription?: unknown;
+        productUrl?: unknown;
+        idealCustomer?: unknown;
+        defaultTone?: unknown;
+        slackWebhookUrl?: unknown;
+        discordWebhookUrl?: unknown;
+        customOpenaiKey?: unknown;
+        xBearerToken?: unknown;
+        apifyToken?: unknown;
       }>(req);
       if (!body) return json({ error: "Invalid JSON body." }, 400);
 
       const patch: Partial<WorkspaceRecord> = {};
-      if (body.name !== undefined) patch.name = body.name.trim();
-      if (body.productName !== undefined) patch.productName = body.productName.trim();
-      if (body.productDescription !== undefined) patch.productDescription = body.productDescription.trim();
-      if (body.productUrl !== undefined) patch.productUrl = body.productUrl.trim();
-      if (body.idealCustomer !== undefined) patch.idealCustomer = body.idealCustomer.trim();
-      if (body.defaultTone && ["founder", "peer", "technical"].includes(body.defaultTone)) {
-        patch.defaultTone = body.defaultTone;
+      if (typeof body.name === "string") patch.name = body.name.trim();
+      if (typeof body.productName === "string") patch.productName = body.productName.trim();
+      if (typeof body.productDescription === "string") patch.productDescription = body.productDescription.trim();
+      if (typeof body.productUrl === "string") {
+        const trimmedUrl = body.productUrl.trim();
+        if (trimmedUrl && !/^https?:\/\//i.test(trimmedUrl)) {
+          return json({ error: "Product URL must start with https:// or http://." }, 400);
+        }
+        patch.productUrl = trimmedUrl;
       }
-      if (body.slackWebhookUrl !== undefined) {
+      if (typeof body.idealCustomer === "string") patch.idealCustomer = body.idealCustomer.trim();
+      if (typeof body.defaultTone === "string" && ALLOWED_TONES.includes(body.defaultTone as ReplyTone)) {
+        patch.defaultTone = body.defaultTone as ReplyTone;
+      }
+      if (typeof body.slackWebhookUrl === "string") {
         const trimmed = body.slackWebhookUrl.trim();
-        if (trimmed && !/^https:\/\/[a-z0-9.-]+/i.test(trimmed)) {
-          return json({ error: "Slack webhook URL must use https://." }, 400);
+        if (trimmed && !isSafeWebhookEndpoint(trimmed)) {
+          return json({ error: "Slack webhook URL must be a public https:// address." }, 400);
         }
         patch.slackWebhookUrl = trimmed;
       }
-      if (body.discordWebhookUrl !== undefined) {
+      if (typeof body.discordWebhookUrl === "string") {
         const trimmed = body.discordWebhookUrl.trim();
-        if (trimmed && !/^https:\/\/[a-z0-9.-]+/i.test(trimmed)) {
-          return json({ error: "Discord webhook URL must use https://." }, 400);
+        if (trimmed && !isSafeWebhookEndpoint(trimmed)) {
+          return json({ error: "Discord webhook URL must be a public https:// address." }, 400);
         }
         patch.discordWebhookUrl = trimmed;
       }
-      if (body.customOpenaiKey !== undefined && body.customOpenaiKey !== "***") {
+      if (typeof body.customOpenaiKey === "string" && body.customOpenaiKey !== "***") {
         patch.customOpenaiKey = body.customOpenaiKey.trim();
       }
-      if (body.xBearerToken !== undefined && body.xBearerToken !== "***") {
+      if (typeof body.xBearerToken === "string" && body.xBearerToken !== "***") {
         patch.xBearerToken = body.xBearerToken.trim();
       }
-      if (body.apifyToken !== undefined && body.apifyToken !== "***") {
+      if (typeof body.apifyToken === "string" && body.apifyToken !== "***") {
         patch.apifyToken = body.apifyToken.trim();
       }
 
@@ -658,7 +738,7 @@ export async function handleApiRequest(
       const sampleMonitor: MonitorRecord = (await db.listMonitors(workspace.id))[0] ?? {
         id: "mon_test",
         workspaceId: workspace.id,
-        name: "SignalScout Test Monitor",
+        name: "SignalScout Test Topic",
         keywords: ["social listening"],
         competitors: ["syften"],
         negativeKeywords: [],
@@ -676,20 +756,23 @@ export async function handleApiRequest(
         externalId: "test_ping",
         author: "test_founder",
         authorHandle: "u/test_founder",
-        title: "Test Alert: Looking for an alternative to Syften without X add-ons?",
-        body: "This is a live test alert from SignalScout verifying your webhook and Contextual Reply Outline formatting.",
+        title: "Test notification: Looking for an alternative to Syften without X add-ons?",
+        body: "This is a live test notification from SignalScout verifying your Slack/Discord alert card and reply draft formatting.",
         url: "https://www.reddit.com/r/SaaS/",
         community: "r/SaaS",
         intentType: "recommendation_request",
         confidenceScore: 94,
         buyingUrgency: "high",
-        reasoning: "Test alert — confirms LLM intent badge and reply assistant outline render cleanly in Slack/Discord.",
+        reasoning: "Test notification confirming intent reasoning and reply draft render cleanly in Slack or Discord.",
         painPoints: ["channel add-on pricing", "noisy Slack alerts"],
         isFilteredNoise: false,
         replyHook: "Paying per-channel add-ons only to wade through keyword spam is frustrating.",
-        replyValuePoints: ["Filter mentions by buying intent before Slack", "Flat $25/mo across Reddit, X, LinkedIn, HN"],
+        replyValuePoints: [
+          "Filter mentions by buying intent before Slack",
+          "Covers Reddit, X, LinkedIn, and Hacker News for free",
+        ],
         replySoftMention: `Full disclosure: building ${workspace.productName || "SignalScout"} for this exact workflow.`,
-        replyDraft: `Paying per-channel add-ons only to wade through keyword spam is frustrating.\n\n- Filter mentions by buying intent before Slack\n- Flat $25/mo across Reddit, X, LinkedIn, HN\n\nFull disclosure: building ${workspace.productName || "SignalScout"} for this exact workflow.`,
+        replyDraft: `Paying per-channel add-ons only to wade through keyword spam is frustrating.\n\n- Filter mentions by buying intent before Slack\n- Covers Reddit, X, LinkedIn, and Hacker News for free\n\nFull disclosure: building ${workspace.productName || "SignalScout"} for this exact workflow.`,
         replyTone: workspace.defaultTone,
         status: "new",
         alertSentSlack: false,
@@ -703,30 +786,17 @@ export async function handleApiRequest(
       return json({ ok: dispatch.slackSent || dispatch.discordSent, dispatch });
     }
 
-    // Billing & Subscription ($25/mo flat)
+    // Simplified free status route (no Stripe subscriptions or paid tiers)
     if (method === "GET" && path === "/api/billing") {
-      const [events, stats] = await Promise.all([
-        db.listBillingEvents(workspace.id),
-        db.getWorkspaceStats(workspace.id),
-      ]);
+      const stats = await db.getWorkspaceStats(workspace.id);
       return json({
-        plan: workspace.plan,
-        priceMonthlyCents: 2500,
-        trialEndsAt: workspace.trialEndsAt,
-        stripeConfigured: Boolean(getEnv("STRIPE_SECRET_KEY") && getEnv("STRIPE_PRICE_ID_FLAT_25")),
-        events,
+        ...getFreePlanStatus(),
         stats,
       });
     }
 
-    if (method === "POST" && path === "/api/billing/subscribe") {
-      const result = await subscribeFlat25(db, workspace, url.origin, fetchFn);
-      return json(result);
-    }
-
-    if (method === "POST" && path === "/api/billing/cancel") {
-      const updated = await cancelSubscription(db, workspace);
-      return json({ plan: updated?.plan ?? "canceled" });
+    if (method === "POST" && (path === "/api/billing/subscribe" || path === "/api/billing/cancel")) {
+      return json(getFreePlanStatus());
     }
 
     return json({ error: `Route not found: ${method} ${path}` }, 404);

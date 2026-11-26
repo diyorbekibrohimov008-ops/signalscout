@@ -53,7 +53,7 @@ function buildValuePoints(post: RawSocialPost, analysis: IntentAnalysis, tone: R
   }
 
   if (analysis.painPoints.includes("channel add-on pricing") || post.channel === "x" || post.channel === "linkedin") {
-    points.push("Watch out for tools that charge base + $40/mo X + $20/mo add-ons — flat multi-channel pricing keeps costs predictable.");
+    points.push("Watch out for tools that charge base fees plus $40/mo X and $20/mo channel add-ons — all-channel tools avoid surprise per-network upgrades.");
   } else {
     points.push("Pre-draft a non-salesy outline inside the alert so you can personalize and reply in 30 seconds instead of staring at a blank box.");
   }
@@ -97,7 +97,7 @@ export function generateReplyOutline(
     const product = cleanProductName(workspace);
     const shortDisclosure =
       workspace.productName?.trim()
-        ? `Disclosure: building ${product} (flat $25/mo across X/Reddit/HN/LI with LLM noise filter) if you want to compare.`
+        ? `Disclosure: building ${product} (free across X, Reddit, HN, and LinkedIn with noise filtering) if you want to compare.`
         : softMention;
     const fullDraft = `${hook}\n\n${conciseValue}\n\n${shortDisclosure}`;
     return {
