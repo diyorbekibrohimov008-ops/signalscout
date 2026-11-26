@@ -4,7 +4,10 @@ import { handleApiRequest } from "../src/lib/router";
 async function dispatch(req: Request): Promise<Response> {
   const url = new URL(req.url);
   const routeParam = url.searchParams.get("__route");
-  if (routeParam !== null && (url.pathname === "/api/index" || url.pathname === "/api")) {
+  if (
+    routeParam !== null &&
+    (url.pathname === "/api/index" || url.pathname === "/api/vercel" || url.pathname === "/api")
+  ) {
     url.pathname = `/api/${routeParam}`.replace(/\/+$/, "") || "/api";
     url.searchParams.delete("__route");
     const forwarded = new Request(url.toString(), {
