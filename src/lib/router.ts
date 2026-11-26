@@ -74,8 +74,13 @@ async function requireAuth(req: Request, db: SignalScoutDb) {
   if (!token) return null;
   const session = await verifySessionToken(token);
   if (!session) return null;
-  const user = await db.getUserById(session.userId);
-  const workspace = await db.getWorkspaceById(session.workspaceId);
+  let user = await db.getUserById(session.userId);
+  let workspace = await db.getWorkspaceById(session.workspaceId);
+  if ((!user || !workspace) && session.email === "demo@signalscout.app") {
+    const seeded = await ensureDemoWorkspace(db);
+    user = seeded.user;
+    workspace = seeded.workspace;
+  }
   if (!user || !workspace) return null;
   return { user, workspace };
 }

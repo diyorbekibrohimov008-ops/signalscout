@@ -671,7 +671,7 @@ function getDb() {
 }
 
 // src/lib/auth.ts
-import { createHmac, pbkdf2Sync, randomBytes as randomBytes2, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, pbkdf2Sync, randomBytes as randomBytes2, timingSafeEqual } from "node:crypto";
 var SESSION_COOKIE_NAME = "ss_session";
 async function hashPassword(password) {
   const salt = randomBytes2(16).toString("hex");
@@ -698,12 +698,11 @@ function fromBase64Url(input) {
   const padded = input.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - input.length % 4) % 4);
   return Buffer.from(padded, "base64");
 }
-var EPHEMERAL_FALLBACK_SECRET = Array.from(
-  crypto.getRandomValues(new Uint8Array(32)),
-  (b) => b.toString(16).padStart(2, "0")
-).join("");
+var DETERMINISTIC_FALLBACK_SECRET = createHash("sha256").update(
+  `signalscout-session::${getEnv("VERCEL_PROJECT_ID") || getEnv("SITE_ID") || "local-dev-workspace"}`
+).digest("hex");
 function getSessionSecret() {
-  return getEnv("SESSION_SECRET") || EPHEMERAL_FALLBACK_SECRET;
+  return getEnv("SESSION_SECRET") || DETERMINISTIC_FALLBACK_SECRET;
 }
 async function signSessionToken(claims, secret = getSessionSecret(), ttlSeconds = 60 * 60 * 24 * 7) {
   const payload = {
@@ -2011,8 +2010,13 @@ async function requireAuth(req, db) {
   if (!token) return null;
   const session = await verifySessionToken(token);
   if (!session) return null;
-  const user = await db.getUserById(session.userId);
-  const workspace = await db.getWorkspaceById(session.workspaceId);
+  let user = await db.getUserById(session.userId);
+  let workspace = await db.getWorkspaceById(session.workspaceId);
+  if ((!user || !workspace) && session.email === "demo@signalscout.app") {
+    const seeded = await ensureDemoWorkspace(db);
+    user = seeded.user;
+    workspace = seeded.workspace;
+  }
   if (!user || !workspace) return null;
   return { user, workspace };
 }

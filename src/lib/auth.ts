@@ -1,4 +1,4 @@
-import { createHmac, pbkdf2Sync, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, pbkdf2Sync, randomBytes, timingSafeEqual } from "node:crypto";
 import { getEnv } from "./env";
 
 export const SESSION_COOKIE_NAME = "ss_session";
@@ -43,13 +43,16 @@ function fromBase64Url(input: string): Buffer {
   return Buffer.from(padded, "base64");
 }
 
-const EPHEMERAL_FALLBACK_SECRET = Array.from(
-  crypto.getRandomValues(new Uint8Array(32)),
-  (b) => b.toString(16).padStart(2, "0"),
-).join("");
+const DETERMINISTIC_FALLBACK_SECRET = createHash("sha256")
+  .update(
+    `signalscout-session::${
+      getEnv("VERCEL_PROJECT_ID") || getEnv("SITE_ID") || "local-dev-workspace"
+    }`,
+  )
+  .digest("hex");
 
 export function getSessionSecret(): string {
-  return getEnv("SESSION_SECRET") || EPHEMERAL_FALLBACK_SECRET;
+  return getEnv("SESSION_SECRET") || DETERMINISTIC_FALLBACK_SECRET;
 }
 
 export async function signSessionToken(
